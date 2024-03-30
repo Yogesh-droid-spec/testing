@@ -1,101 +1,74 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+import { WebClient } from '@slack/web-api';
 
 function App() {
-  const [message, setMessage] = useState('');
-  const [recipientUserId, setRecipientUserId] = useState('');
-  const [accessToken, setAccessToken] = useState('');
-  const [responseMessage, setResponseMessage] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [accessToken, setAccessToken] = useState(null);
+  const [authedUser, setAuthedUser] = useState(null);
 
-  // Function to send message to Slack user
-  const sendMessage = async () => {
+  const client = new WebClient();
+
+  const handleAddSlackUser = async () => {
+    setIsAuthenticating(true);
+
     try {
-      const response = await axios.post(
-        'https://slack.com/api/chat.postMessage',
-        {
-          channel: recipientUserId,
-          text: message
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
+      // Replace these values with your actual Slack app credentials
+      const clientId = '6869033625238.6888747023204';
+      const clientSecret = '5fb7a7581363c2484f1dd5d702175697';
+      const redirectUri = `${window.location.origin}/slack/oauth_redirect`;
+
+      // Open the Slack authentication URL in a new window
+      const authWindow = window.open(
+        `https://slack.com/oauth/v2/authorize?client_id=${clientId}&scope=chat:write,users:read&user_scope=users:read&redirect_uri=${redirectUri}`,
+        '_blank',
+        'width=800,height=600'
       );
 
-      if (response.data.ok) {
-        setResponseMessage('Message sent successfully!');
-      } else {
-        setResponseMessage(`Failed to send message: ${response.data.error}`);
-      }
-    } catch (error) {
-      setResponseMessage(`An error occurred: ${error.message}`);
-    }
-  };
-
-  // Function to handle Slack authentication completion
-  const handleSlackAuthCompletion = async () => {
-    // Retrieve access token from query parameters
-    const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get('code');
-
-    // Exchange authorization code for access token
-    try {
-      const response = await axios.post(
-        'https://slack.com/api/oauth.v2.access',
-        {
-          client_id: '6869033625238.6888747023204',
-          client_secret: '5fb7a7581363c2484f1dd5d702175697',
-          code
-        },
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
+      // Wait for the authentication process to complete
+      const { code } = await new Promise((resolve, reject) => {
+        const handleMessage = (event) => {
+          if (event.origin === window.location.origin && event.data && event.data.type === 'slack-auth-success') {
+            resolve(event.data.payload);
+            window.removeEventListener('message', handleMessage);
           }
-        }
-      );
+        };
 
-      // Set access token and user ID
-      setAccessToken(response.data.authed_user.access_token);
-      setRecipientUserId(response.data.authed_user.id);
+        window.addEventListener('message', handleMessage);
+
+        // Clean up the event listener when the authentication window is closed
+        authWindow.addEventListener('beforeunload', () => {
+          window.removeEventListener('message', handleMessage);
+          reject(new Error('Authentication process was cancelled'));
+        });
+      });
+
+      // Exchange the code for an access token
+      const { authedUser, accessToken: token } = await client.oauth.v2.access({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+      });
+
+      setAccessToken(token);
+      setAuthedUser(authedUser);
     } catch (error) {
-      console.error('Failed to retrieve access token:', error);
+      console.error('Error during Slack authentication:', error);
+    } finally {
+      setIsAuthenticating(false);
     }
   };
 
   return (
     <div>
-      <h1>Send Message to Slack User</h1>
-      <label>
-        Recipient User ID:
-        <input
-          type="text"
-          value={recipientUserId}
-          onChange={(e) => setRecipientUserId(e.target.value)}
-        />
-      </label>
-      <label>
-        Access Token:
-        <input
-          type="text"
-          value={accessToken}
-          onChange={(e) => setAccessToken(e.target.value)}
-        />
-      </label>
-      <label>
-        Message:
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-        />
-      </label>
-      <button onClick={sendMessage}>Send Message</button>
-      <div>{responseMessage}</div>
-      <a href="https://slack.com/oauth/v2/authorize?client_id=6869033625238.6888747023204&scope=chat:write&user_scope=users:read" onClick={handleSlackAuthCompletion}>
-        <button>Add Slack</button>
-      </a>
+      <button onClick={handleAddSlackUser} disabled={isAuthenticating}>
+        {isAuthenticating ? 'Authenticating...' : 'Add Slack User'}
+      </button>
+      {accessToken && authedUser && (
+        <div>
+          <p>Access Token: {accessToken}</p>
+          <p>Authenticated User: {JSON.stringify(authedUser)}</p>
+        </div>
+      )}
     </div>
   );
 }
